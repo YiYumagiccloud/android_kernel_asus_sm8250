@@ -239,4 +239,8 @@ source "drivers/motor/aw8697_haptic/Kconfig"
 
 source "drivers/gamepad_hid_driver/Kconfig"
 
+# KernelSUs
+
+source "drivers/kernelsu/Kconfig"
+
 endmenu

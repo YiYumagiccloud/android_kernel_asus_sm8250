@@ -53,9 +53,10 @@ jobs:
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "SUBARCH=arm64" >> $GITHUB_ENV
           echo "LLVM=1" >> $GITHUB_ENV
-          echo "LLVM_IAS=1" >> $GITHUB_ENV
+          echo "LLVM_IAS=0" >> $GITHUB_ENV
           echo "CCACHE=ccache" >> $GITHUB_ENV
           echo "PATH=$PWD/toolchains/clang/bin:$PATH" >> $GITHUB_ENV
+
 
       - name: Kernel defconfig (kona + obiwan)
         run: |

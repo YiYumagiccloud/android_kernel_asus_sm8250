@@ -1,9 +1,7 @@
-name: 构建ASUS ROG Phone 3内核（修复extcon）
+name: 构建ASUS ROG Phone 3内核（简易工具链）
 
 on:
   push:
-    branches: [ lineage-23.0 ]
-  pull_request:
     branches: [ lineage-23.0 ]
   workflow_dispatch:
 
@@ -17,147 +15,79 @@ jobs:
       with:
         submodules: recursive
 
-    - name: 修复wakeup.c中的包含路径
-      run: |
-        echo "=== 修复wakeup.c包含路径 ==="
-        cd ${{ github.workspace }}
-        
-        # 检查文件是否存在
-        if [ -f "drivers/base/power/wakeup.c" ]; then
-          echo "找到wakeup.c文件，修复包含路径..."
-          
-          # 备份原文件
-          cp drivers/base/power/wakeup.c drivers/base/power/wakeup.c.bak
-          
-          # 修复包含路径
-          sed -i 's|#include <../../extcon/extcon.h>|#include "../../../extcon/extcon.h"|' drivers/base/power/wakeup.c
-          
-          # 验证修复
-          echo "修复后的第26行:"
-          sed -n '26p' drivers/base/power/wakeup.c
-          
-          echo "✅ 修复完成"
-        else
-          echo "❌ 错误：找不到wakeup.c文件"
-          find . -name "wakeup.c" -type f
-        fi
-
     - name: 设置编译环境
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          bc bison build-essential ccache curl flex gcc-multilib \
-          g++-multilib git gnupg gperf imagemagick lib32ncurses-dev \
-          lib32readline-dev lib32z1-dev libelf-dev liblz4-tool \
-          libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
-          lzop pngcrush rsync schedtool squashfs-tools xsltproc \
-          zip zlib1g-dev python3 python3-pip unzip wget libncurses-dev bzip2
-        pip3 install --user pycryptodome
+          bc build-essential ccache libncurses-dev libssl-dev \
+          flex bison libelf-dev git wget unzip gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi
+          
+        # 安装gcc-10（兼容性更好）
+        sudo apt-get install -y gcc-10-aarch64-linux-gnu gcc-10-arm-linux-gnueabi
 
-    - name: 下载编译工具链
-      run: |
-        echo "=== 下载编译工具链 ==="
-        wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
-        unzip -q android-ndk-r26b-linux.zip
-        mv android-ndk-r26b ndk
-        echo "✅ 工具链下载完成"
-
-    - name: 配置内核
+    - name: 修复wakeup.c
       run: |
         cd ${{ github.workspace }}
-        echo "=== 配置内核 ==="
+        sed -i 's|#include <../../extcon/extcon.h>|#include "../../../extcon/extcon.h"|' drivers/base/power/wakeup.c
+
+    - name: 编译内核（使用系统GCC）
+      timeout-minutes: 60
+      run: |
+        cd ${{ github.workspace }}
         
         # 清理
         make clean 2>/dev/null || true
         rm -f .config
         
-        # 使用基础配置
-        echo "应用kona_defconfig..."
-        make ARCH=arm64 LLVM=1 LLVM_IAS=1 vendor/kona_defconfig
+        # 使用系统自带的GCC交叉编译器
+        echo "使用系统GCC交叉编译器..."
         
-        # 合并设备配置
-        if [ -f "arch/arm64/configs/vendor/asus/obiwan.config" ]; then
-          echo "合并obiwan.config..."
-          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config
-          echo "✅ 配置合并完成"
-        fi
-
-    - name: 检查和修复配置
-      run: |
-        cd ${{ github.workspace }}
-        echo "=== 检查和修复配置 ==="
+        # 尝试不同的交叉编译器前缀
+        COMPILERS=("aarch64-linux-gnu-" "aarch64-linux-gnu-gcc-10" "aarch64-linux-gnu-gcc-9")
         
-        # 确保extcon启用
-        echo "检查extcon配置..."
-        if ! grep -q "CONFIG_EXTCON=y" .config; then
-          echo "启用CONFIG_EXTCON..."
-          ./scripts/config --enable CONFIG_EXTCON
-        else
-          echo "✅ CONFIG_EXTCON已启用"
-        fi
+        for compiler in "${COMPILERS[@]}"; do
+          if which ${compiler}gcc >/dev/null 2>&1; then
+            echo "使用编译器: ${compiler}"
+            export CROSS_COMPILE="${compiler}"
+            break
+          fi
+        done
         
-        # 生成最终配置
-        echo "生成最终配置..."
-        for i in $(seq 1 15); do
-          echo ""
-        done | make ARCH=arm64 LLVM=1 LLVM_IAS=1 oldconfig 2>&1 | tail -50
-
-    - name: 编译内核
-      timeout-minutes: 45
-      env:
-        ARCH: arm64
-        SUBARCH: arm64
-      run: |
-        cd ${{ github.workspace }}
-        echo "=== 开始编译内核 ==="
-        
-        # 验证修复
-        echo "验证wakeup.c修复:"
-        if grep -q '#include "../../../extcon/extcon.h"' drivers/base/power/wakeup.c; then
-          echo "✅ wakeup.c包含路径正确"
-        else
-          echo "❌ wakeup.c包含路径仍有问题"
-          head -30 drivers/base/power/wakeup.c | grep -n "extcon"
+        if [ -z "$CROSS_COMPILE" ]; then
+          echo "❌ 未找到合适的交叉编译器"
           exit 1
         fi
         
-        echo "开始编译..."
-        make ARCH=arm64 LLVM=1 LLVM_IAS=1 -j$(($(nproc) * 2)) 2>&1 | tee build.log
+        # 配置内核
+        make ARCH=arm64 $CROSS_COMPILE vendor/kona_defconfig
         
-        echo "=== 编译结果检查 ==="
+        if [ -f "arch/arm64/configs/vendor/asus/obiwan.config" ]; then
+          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config
+        fi
+        
+        yes "" | make ARCH=arm64 $CROSS_COMPILE oldconfig
+        
+        # 开始编译
+        echo "开始编译..."
+        make ARCH=arm64 $CROSS_COMPILE -j$(nproc) 2>&1 | tee build.log
+        
+        # 检查结果
         if [ -f "arch/arm64/boot/Image.gz" ] || [ -f "arch/arm64/boot/Image" ]; then
           echo "🎉 编译成功！"
           ls -lh arch/arm64/boot/
         else
           echo "❌ 编译失败"
-          echo "最后50行错误:"
-          tail -50 build.log | grep -i "error\|fatal"
+          tail -50 build.log
           exit 1
         fi
 
-    - name: 打包内核
-      if: success()
-      run: |
-        cd ${{ github.workspace }}
-        BUILD_DATE=$(date +"%Y%m%d-%H%M")
-        OUTPUT_DIR="kernel-$BUILD_DATE"
-        mkdir -p $OUTPUT_DIR
-        
-        # 复制内核文件
-        if [ -f "arch/arm64/boot/Image.gz" ]; then
-          cp arch/arm64/boot/Image.gz $OUTPUT_DIR/
-        elif [ -f "arch/arm64/boot/Image" ]; then
-          cp arch/arm64/boot/Image $OUTPUT_DIR/
-        fi
-        
-        # 打包
-        tar -czf $OUTPUT_DIR.tar.gz $OUTPUT_DIR/
-        echo "✅ 打包完成: $OUTPUT_DIR.tar.gz"
-
-    - name: 上传构建产物
+    - name: 上传内核
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-${{ github.run_number }}
-        path: ${{ github.workspace }}/*.tar.gz
+        name: kernel-build
+        path: |
+          ${{ github.workspace }}/arch/arm64/boot/Image*
+          ${{ github.workspace }}/.config
         retention-days: 30

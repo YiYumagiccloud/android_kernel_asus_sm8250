@@ -1,4 +1,4 @@
-name: 构建ASUS ROG Phone 3内核（Ubuntu 24.04适配版）
+name: 构建ASUS ROG Phone 3内核（精简调试版）
 
 on:
   push:
@@ -15,286 +15,122 @@ jobs:
       with:
         submodules: recursive
 
-    - name: 设置编译环境（Ubuntu 24.04适配）
+    - name: 设置最小化编译环境
       run: |
         sudo apt-get update
-        
-        # Ubuntu 24.04不再有python2，使用python3替代
-        # 安装必要的基础包
         sudo apt-get install -y \
           bc build-essential ccache libncurses-dev libssl-dev \
-          flex bison libelf-dev git wget unzip gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi make cmake cpio rsync python3 \
-          libgmp-dev libmpc-dev libmpfr-dev texinfo gawk \
-          lz4 zstd lzop pv xxd kmod liblz4-tool libwrap0-dev \
-          lib32z1-dev lib32ncurses-dev libxml2-utils xsltproc \
-          device-tree-compiler
-        
-        # 创建python2的符号链接（有些脚本可能需要）
-        if ! command -v python2 &> /dev/null; then
-          echo "创建python2符号链接指向python3"
-          sudo ln -sf /usr/bin/python3 /usr/bin/python2
-        fi
-        
-        echo "✅ 环境设置完成"
+          flex bison libelf-dev git make gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi python3
+        sudo ln -sf /usr/bin/python3 /usr/bin/python2
 
     - name: 修复wakeup.c包含路径
       run: |
         cd ${{ github.workspace }}
         if [ -f "drivers/base/power/wakeup.c" ]; then
-          echo "修复wakeup.c中的包含路径..."
-          # 使用正确的相对路径
           sed -i 's|#include <../../extcon/extcon.h>|#include "../../../extcon/extcon.h"|' drivers/base/power/wakeup.c
-          echo "✅ 修复完成"
-          
-          # 验证修复
-          echo "验证修复结果:"
-          grep -n "extcon.h" drivers/base/power/wakeup.c
-        else
-          echo "❌ 找不到wakeup.c文件"
-          exit 1
+          echo "修复后的第26行:"
+          sed -n '26p' drivers/base/power/wakeup.c
         fi
 
-    - name: 配置内核（简化方法）
+    - name: 简单配置内核
       run: |
         cd ${{ github.workspace }}
-        echo "=== 配置内核 ==="
         
-        # 简单清理
-        echo "清理工作区..."
-        rm -f .config .config.old 2>/dev/null || true
+        # 完全清理
+        make clean 2>/dev/null || true
+        make mrproper 2>/dev/null || true
+        rm -f .config
         
-        # 方法：直接使用defconfig命令
-        echo "生成基础配置..."
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- vendor/kona_defconfig
+        # 简单复制配置文件
+        cp arch/arm64/configs/vendor/kona_defconfig .config
+        echo "✅ 复制kona_defconfig"
         
-        if [ $? -ne 0 ]; then
-          echo "❌ defconfig失败，尝试备用方法..."
-          # 备用方法：直接复制文件
-          cp arch/arm64/configs/vendor/kona_defconfig .config
-        fi
-        
-        # 检查.config是否创建
-        if [ ! -f ".config" ]; then
-          echo "❌ 错误：无法创建.config文件"
-          echo "可用的defconfig文件:"
-          find arch/arm64/configs -name "*defconfig" -type f | head -10
-          exit 1
-        fi
-        
-        echo "✅ 基础配置创建完成"
-
-    - name: 合并设备特定配置
-      run: |
-        cd ${{ github.workspace }}
-        echo "=== 合并设备配置 ==="
-        
+        # 合并设备配置（如果存在）
         if [ -f "arch/arm64/configs/vendor/asus/obiwan.config" ]; then
-          echo "找到obiwan.config，正在合并..."
-          
-          # 使用配置合并工具
-          if [ -f "scripts/kconfig/merge_config.sh" ]; then
-            ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config
-            echo "✅ 配置合并成功"
-          else
-            echo "⚠️ 找不到merge_config.sh，手动追加配置"
-            cat arch/arm64/configs/vendor/asus/obiwan.config >> .config
-            sort -u .config > .config.tmp && mv .config.tmp .config
-          fi
-        else
-          echo "⚠️ 未找到obiwan.config，跳过设备配置"
+          cat arch/arm64/configs/vendor/asus/obiwan.config >> .config
+          echo "✅ 追加obiwan.config"
         fi
+        
+        # 去重配置
+        sort -u .config > .config.tmp && mv .config.tmp .config
+        echo "配置行数: $(wc -l < .config)"
 
-    - name: 生成最终配置
+    - name: 编译并捕获完整错误
+      timeout-minutes: 60
       run: |
         cd ${{ github.workspace }}
-        echo "=== 生成最终配置 ==="
+        echo "=== 开始编译 ==="
         
-        # 使用yes自动回答所有配置问题
-        echo "自动生成最终配置..."
-        yes "" | make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- oldconfig 2>&1 | tail -50
-        
-        echo "配置验证:"
-        echo "1. 检查基本架构配置:"
-        grep -E "^CONFIG_ARM64=y|^CONFIG_64BIT=y" .config || echo "⚠️ 未找到ARM64配置"
-        
-        echo "2. 检查设备配置:"
-        grep -E "^CONFIG_MACH_ASUS" .config || echo "⚠️ 未找到ASUS设备配置"
-        
-        echo "3. 检查extcon配置:"
-        grep -E "^CONFIG_EXTCON" .config || echo "⚠️ 未找到extcon配置"
-
-    - name: 编译内核
-      timeout-minutes: 90
-      env:
-        ARCH: arm64
-        SUBARCH: arm64
-        CROSS_COMPILE: aarch64-linux-gnu-
-      run: |
-        cd ${{ github.workspace }}
-        echo "=== 开始编译内核 ==="
-        
-        # 显示编译信息
-        echo "编译信息:"
-        echo "架构: $ARCH"
-        echo "交叉编译器: $CROSS_COMPILE"
-        echo "CPU核心数: $(nproc)"
-        
-        # 检查工具链
-        echo "工具链检查:"
-        which ${CROSS_COMPILE}gcc
-        ${CROSS_COMPILE}gcc --version | head -3
-        
-        # 开始编译（详细输出）
-        echo "开始编译内核..."
-        
-        # 使用详细的编译输出以便调试
-        make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE V=1 -j$(($(nproc) - 1)) 2>&1 | tee build.log
-        
-        # 检查编译结果
-        echo "=== 编译结果 ==="
-        
-        if [ -f "arch/arm64/boot/Image.gz" ]; then
-          echo "🎉 编译成功！"
-          echo "生成的内核文件: arch/arm64/boot/Image.gz"
-          ls -lh arch/arm64/boot/Image.gz
-          file arch/arm64/boot/Image.gz
+        # 保存完整编译日志
+        {
+          echo "编译开始时间: $(date)"
+          echo "编译器信息:"
+          aarch64-linux-gnu-gcc --version
+          echo ""
           
-          # 检查模块
-          echo "检查内核模块:"
-          find . -name "*.ko" -type f 2>/dev/null | wc -l | xargs echo "找到的模块数量:"
+          # 第一步：生成头文件
+          echo "=== 生成头文件 ==="
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- prepare 2>&1
+          echo "准备步骤退出码: $?"
+          echo ""
           
-        elif [ -f "arch/arm64/boot/Image" ]; then
-          echo "🎉 编译成功！"
-          echo "生成的内核文件: arch/arm64/boot/Image"
-          ls -lh arch/arm64/boot/Image
-          file arch/arm64/boot/Image
+          # 第二步：编译内核
+          echo "=== 编译内核 ==="
+          time make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j2 2>&1
+          echo "编译退出码: $?"
+          
+          echo "编译结束时间: $(date)"
+        } | tee full_build.log
+        
+        # 检查结果
+        if [ -f "arch/arm64/boot/Image.gz" ] || [ -f "arch/arm64/boot/Image" ]; then
+          echo "✅ 编译成功！"
+          ls -lh arch/arm64/boot/
         else
           echo "❌ 编译失败"
-          echo "错误摘要:"
-          tail -100 build.log | grep -B3 -A3 "error\|Error\|ERROR\|fatal\|undefined"
           
-          echo "尝试诊断问题:"
-          echo "1. 检查.config文件:"
-          ls -la .config
-          echo "2. 检查头文件:"
-          if [ -f "drivers/extcon/extcon.h" ]; then
-            echo "✅ drivers/extcon/extcon.h 存在"
-          else
-            echo "❌ drivers/extcon/extcon.h 不存在"
-          fi
+          # 提取关键错误信息
+          echo "=== 错误摘要 ==="
+          grep -n -B2 -A2 "error\|Error\|ERROR\|fatal\|undefined" full_build.log | head -50
           
+          echo ""
+          echo "=== 最后50行 ==="
+          tail -50 full_build.log
+          
+          # 保存错误日志供下载
+          cp full_build.log error.log
           exit 1
         fi
+
+    - name: 上传完整编译日志
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: full-build-log-${{ github.run_number }}
+        path: |
+          ${{ github.workspace }}/full_build.log
+          ${{ github.workspace }}/.config
+        retention-days: 15
 
     - name: 打包内核
       if: success()
       run: |
         cd ${{ github.workspace }}
-        echo "=== 打包内核文件 ==="
-        
-        # 获取构建信息
-        KERNEL_VERSION=$(grep "Linux/arm64" include/generated/utsrelease.h 2>/dev/null | cut -d'"' -f2 || echo "unknown")
-        BUILD_DATE=$(date +"%Y%m%d-%H%M")
-        
-        # 创建输出目录
-        OUTPUT_DIR="asus-rog3-kernel-${BUILD_DATE}"
-        mkdir -p $OUTPUT_DIR
-        
-        # 复制内核文件
+        mkdir -p output
         if [ -f "arch/arm64/boot/Image.gz" ]; then
-          cp arch/arm64/boot/Image.gz $OUTPUT_DIR/
-          KERNEL_FILE="Image.gz"
+          cp arch/arm64/boot/Image.gz output/
         elif [ -f "arch/arm64/boot/Image" ]; then
-          cp arch/arm64/boot/Image $OUTPUT_DIR/
-          KERNEL_FILE="Image"
+          cp arch/arm64/boot/Image output/
         fi
-        
-        # 复制设备树文件（如果存在）
-        if find arch/arm64/boot/dts -name "*.dtb" -type f 2>/dev/null | head -1 > /dev/null; then
-          mkdir -p $OUTPUT_DIR/dtbs
-          find arch/arm64/boot/dts -name "*.dtb" -type f -exec cp {} $OUTPUT_DIR/dtbs/ \;
-          echo "✅ 复制DTB文件"
-        fi
-        
-        # 复制配置文件
-        cp .config $OUTPUT_DIR/
-        
-        # 创建构建信息文件
-        cat > $OUTPUT_DIR/build-info.txt << EOF
-        ASUS ROG Phone 3 内核构建信息
-        =============================
-        
-        设备: ASUS ROG Phone 3 (ASUS_I003D)
-        代号: obiwan
-        平台: SM8250 (kona)
-        
-        内核版本: ${KERNEL_VERSION}
-        构建时间: ${BUILD_DATE}
-        编译器: aarch64-linux-gnu-gcc
-        文件格式: ${KERNEL_FILE}
-        
-        配置来源:
-          - kona_defconfig
-          - obiwan.config (ASUS专用)
-        
-        构建环境:
-          - GitHub Actions
-          - Ubuntu 24.04
-          - 自动修复extcon包含路径
-        
-        备注: 适用于crDroid 12 / Android 13
-        EOF
-        
-        # 创建简单的刷机脚本
-        cat > $OUTPUT_DIR/flash.sh << 'EOF'
-        #!/bin/bash
-        # ASUS ROG Phone 3 内核刷机脚本
-        
-        echo "ASUS ROG Phone 3 内核刷机"
-        echo "========================="
-        
-        if [ ! -f "Image.gz" ]; then
-            echo "错误: 找不到内核文件 Image.gz"
-            exit 1
-        fi
-        
-        echo "请将内核文件打包到AnyKernel3模板中刷入"
-        echo ""
-        echo "步骤:"
-        echo "1. 下载 AnyKernel3 模板"
-        echo "2. 用本目录的 Image.gz 替换模板中的内核文件"
-        echo "3. 在TWRP/OrangeFox中刷入zip包"
-        echo ""
-        echo "注意: 刷机有风险，请备份重要数据"
-        EOF
-        
-        chmod +x $OUTPUT_DIR/flash.sh
-        
-        # 打包所有文件
-        tar -czf ${OUTPUT_DIR}.tar.gz $OUTPUT_DIR/
-        
+        cp .config output/
+        tar -czf kernel-output.tar.gz output/
         echo "✅ 打包完成"
-        echo "文件: ${OUTPUT_DIR}.tar.gz"
-        echo "大小: $(du -h ${OUTPUT_DIR}.tar.gz | cut -f1)"
-        echo ""
-        echo "包含内容:"
-        tar -tzf ${OUTPUT_DIR}.tar.gz | sed 's/^/  /'
 
-    - name: 上传构建产物
+    - name: 上传成功产物
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-rog3-${{ github.run_number }}
-        path: ${{ github.workspace }}/*.tar.gz
-        retention-days: 30
-
-    - name: 上传内核文件（直接）
-      if: success()
-      uses: actions/upload-artifact@v4
-      with:
-        name: kernel-files-${{ github.run_number }}
-        path: |
-          ${{ github.workspace }}/arch/arm64/boot/Image*
-          ${{ github.workspace }}/.config
+        name: kernel-success-${{ github.run_number }}
+        path: ${{ github.workspace }}/kernel-output.tar.gz
         retention-days: 30

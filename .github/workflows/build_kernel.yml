@@ -1,0 +1,211 @@
+name: 构建ASUS ROG Phone 3内核
+
+on:
+  push:
+    branches: [ lineage-23.0 ]
+  pull_request:
+    branches: [ lineage-23.0 ]
+  workflow_dispatch:  # 允许在GitHub网页手动触发构建
+    inputs:
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'obiwan'
+        type: choice
+        options:
+          - obiwan
+          - kona
+
+env:
+  KERNEL_NAME: "ASUS_ROG_Phone_3_SM8250"
+  TOOLCHAIN_CLANG_VERSION: "r487747c"  # Android通用Clang版本
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [obiwan]
+      fail-fast: false
+    
+    steps:
+    - name: 检查仓库代码
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive  # 重要：递归clone子模块
+
+    - name: 设置编译环境
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          bc bison build-essential ccache curl flex gcc-multilib \
+          g++-multilib git gnupg gperf imagemagick lib32ncurses-dev \
+          lib32readline-dev lib32z1-dev libelf-dev liblz4-tool \
+          libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
+          lzop pngcrush rsync schedtool squashfs-tools xsltproc \
+          zip zlib1g-dev python3 python3-pip
+        pip3 install --user pycryptodome
+    
+    - name: 下载编译工具链
+      run: |
+        # 下载Android Clang编译器
+        echo "下载Clang工具链..."
+        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.TOOLCHAIN_CLANG_VERSION }}.tar.gz
+        mkdir -p clang
+        tar -xzf clang-${{ env.TOOLCHAIN_CLANG_VERSION }}.tar.gz -C clang
+        rm clang-${{ env.TOOLCHAIN_CLANG_VERSION }}.tar.gz
+        
+        # 下载64位ARM交叉编译器
+        echo "下载AArch64交叉编译器..."
+        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/main.tar.gz
+        mkdir -p aarch64-linux-android-4.9
+        tar -xzf main.tar.gz -C aarch64-linux-android-4.9
+        rm main.tar.gz
+        
+        # 下载32位ARM交叉编译器（某些驱动可能需要）
+        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/heads/main.tar.gz
+        mkdir -p arm-linux-androideabi-4.9
+        tar -xzf main.tar.gz -C arm-linux-androideabi-4.9
+        rm main.tar.gz
+    
+    - name: 设置环境变量
+      run: |
+        echo "CLANG_PATH=${{ github.workspace }}/clang/bin" >> $GITHUB_ENV
+        echo "AARCH64_PATH=${{ github.workspace }}/aarch64-linux-android-4.9/bin" >> $GITHUB_ENV
+        echo "ARM32_PATH=${{ github.workspace }}/arm-linux-androideabi-4.9/bin" >> $GITHUB_ENV
+        echo "PATH=${{ github.workspace }}/clang/bin:${{ github.workspace }}/aarch64-linux-android-4.9/bin:${{ github.workspace }}/arm-linux-androideabi-4.9/bin:$PATH" >> $GITHUB_ENV
+        
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-android-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+    
+    - name: 准备配置文件
+      run: |
+        echo "正在准备内核配置..."
+        cd ${{ github.workspace }}
+        
+        # 根据目标选择配置
+        if [ "${{ matrix.target }}" = "obiwan" ]; then
+          echo "使用ASUS ROG Phone 3专用配置 (obiwan)"
+          # 复制基础配置
+          cp arch/arm64/configs/vendor/kona_defconfig .config
+          # 合并设备专用配置
+          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config
+          # 合并调试配置（如果需要）
+          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/debugfs.config
+        elif [ "${{ matrix.target }}" = "kona" ]; then
+          echo "使用通用kona配置"
+          cp arch/arm64/configs/vendor/kona_defconfig .config
+          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/debugfs.config
+        fi
+        
+        # 显示配置摘要
+        echo "配置完成，检查架构设置..."
+        grep -i "CONFIG_ARM64=y" .config || echo "警告：未找到ARM64配置"
+    
+    - name: 编译内核
+      timeout-minutes: 45
+      run: |
+        cd ${{ github.workspace }}
+        echo "开始编译内核..."
+        
+        # 清理并准备输出目录
+        make O=out clean 2>/dev/null || true
+        mkdir -p out
+        
+        # 生成最终配置
+        make O=out ARCH=arm64 CC=$CC CLANG_TRIPLE=$CLANG_TRIPLE \
+          CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
+          menuconfig 2>/dev/null || echo "menuconfig跳过，使用现有配置"
+        
+        # 编译内核
+        make O=out ARCH=arm64 CC=$CC CLANG_TRIPLE=$CLANG_TRIPLE \
+          CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
+          -j$(($(nproc) * 2)) 2>&1 | tee build.log
+        
+        echo "编译完成！"
+        
+        # 检查输出文件
+        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
+          echo "✅ 找到内核文件: Image.gz"
+          ls -lh out/arch/arm64/boot/
+        elif [ -f "out/arch/arm64/boot/Image" ]; then
+          echo "✅ 找到内核文件: Image"
+          ls -lh out/arch/arm64/boot/
+        else
+          echo "❌ 未找到内核文件"
+          echo "编译日志最后100行："
+          tail -100 build.log
+          exit 1
+        fi
+    
+    - name: 打包生成的文件
+      if: success()
+      run: |
+        cd ${{ github.workspace }}
+        echo "打包内核文件..."
+        
+        # 创建输出目录
+        BUILD_DATE=$(date +"%Y%m%d-%H%M")
+        OUTPUT_DIR="kernel-${{ matrix.target }}-$BUILD_DATE"
+        mkdir -p $OUTPUT_DIR
+        
+        # 复制内核文件
+        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
+          cp out/arch/arm64/boot/Image.gz $OUTPUT_DIR/
+          KERNEL_FILE="Image.gz"
+        elif [ -f "out/arch/arm64/boot/Image" ]; then
+          cp out/arch/arm64/boot/Image $OUTPUT_DIR/
+          KERNEL_FILE="Image"
+        fi
+        
+        # 复制模块文件（如果有）
+        if [ -d "out/modules" ] || [ -d "out/lib/modules" ]; then
+          mkdir -p $OUTPUT_DIR/modules
+          find out -name "*.ko" -exec cp {} $OUTPUT_DIR/modules/ \; 2>/dev/null || true
+        fi
+        
+        # 复制dtb文件（如果有）
+        if [ -f "out/arch/arm64/boot/dts/vendor/qcom/kona.dtb" ] || [ -f "out/arch/arm64/boot/dts/vendor/qcom/sm8250.dtb" ]; then
+          mkdir -p $OUTPUT_DIR/dtb
+          find out/arch/arm64/boot/dts -name "*.dtb" -exec cp {} $OUTPUT_DIR/dtb/ \; 2>/dev/null || true
+        fi
+        
+        # 复制编译日志
+        cp build.log $OUTPUT_DIR/
+        
+        # 创建信息文件
+        cat > $OUTPUT_DIR/build-info.txt << EOF
+        内核名称: ${{ env.KERNEL_NAME }}
+        目标设备: ${{ matrix.target }}
+        构建时间: $BUILD_DATE
+        工具链: Clang ${{ env.TOOLCHAIN_CLANG_VERSION }}
+        仓库: https://github.com/YiYumagiccloud/android_kernel_asus_sm8250
+        分支: ${{ github.ref_name }}
+        提交: ${{ github.sha }}
+        EOF
+        
+        # 打包
+        tar -czf $OUTPUT_DIR.tar.gz $OUTPUT_DIR/
+        echo "生成文件: $OUTPUT_DIR.tar.gz"
+        ls -lh $OUTPUT_DIR.tar.gz
+    
+    - name: 上传构建产物
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-${{ matrix.target }}-${{ github.run_number }}
+        path: |
+          ${{ github.workspace }}/kernel-*.tar.gz
+          ${{ github.workspace }}/build.log
+        retention-days: 30
+    
+    - name: 上传编译日志（即使失败）
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-failure-logs-${{ matrix.target }}
+        path: |
+          ${{ github.workspace }}/build.log
+        retention-days: 15

@@ -15,21 +15,20 @@ jobs:
           - name: Build Kernel
             uses: dabao1955/kernel_build_action@main
             with:
-              # 1. 指向你提供的 Asus ROG 3 内核地址
               kernel-url: https://github.com/Rocky7842/android_kernel_asus_sm8250
-              # 2. 分支必须匹配 lineage-23.0
               kernel-branch: lineage-23.0
-              # 3. SM8250 (Kona) 的标准配置文件
               config: vendor/kona-perf_defconfig
               arch: arm64
-              # 4. 现代内核通常强制使用 Clang
-              aosp-gcc: false
+              # 1. 必须同时开启，以满足脚本校验
+              aosp-gcc: true
               aosp-clang: true
-              # 5. 建议使用这个更稳妥的版本
+              # 2. 关键：将 Android 版本降回 12。
+              # 只有这样，脚本才能在 Google 服务器上成功找到对应的 GCC 分支。
               android-version: 12
+              # 3. 虽然 Android 环境是 12，但我们可以强制 Clang 使用新版本来适配安卓 16 内核
               aosp-clang-version: r450784d
-              # 6. 其他功能开关
+              # 4. 这里的参数非常关键，确保编译器行为正确
+              extra-make-args: [ "LLVM=1", "LLVM_IAS=1" ]
               disable-lto: true
               anykernel3: true
-              # 7. 自动发布编译好的内核文件
               release: true

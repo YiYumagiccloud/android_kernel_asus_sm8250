@@ -26,8 +26,8 @@ jobs:
               aosp-gcc: true
               aosp-clang: true
               # 5. 关键：安卓 15/16 对应的 AOSP Clang 版本建议使用 r522815 或更高
-              android-version: 16
-              aosp-clang-version: r522815
+              android-version: 14
+              aosp-clang-version: r487747c
               # 6. 其他功能开关
               disable-lto: true
               anykernel3: true

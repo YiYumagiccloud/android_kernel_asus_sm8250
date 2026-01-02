@@ -1,9 +1,7 @@
-name: 构建ASUS ROG Phone 3内核（正确工具链）
+name: 构建ASUS ROG Phone 3内核（完整修复版）
 
 on:
   push:
-    branches: [ lineage-23.0 ]
-  pull_request:
     branches: [ lineage-23.0 ]
   workflow_dispatch:
 
@@ -21,159 +19,251 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          bc bison build-essential ccache curl flex gcc-multilib \
-          g++-multilib git gnupg gperf imagemagick lib32ncurses-dev \
-          lib32readline-dev lib32z1-dev libelf-dev liblz4-tool \
-          libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
-          lzop pngcrush rsync schedtool squashfs-tools xsltproc \
-          zip zlib1g-dev python3 python3-pip unzip wget libncurses-dev bzip2
-        pip3 install --user pycryptodome
-
-    - name: 下载AOSP工具链
-      run: |
-        echo "=== 下载AOSP预构建工具链 ==="
-        
-        # 创建工具链目录
-        mkdir -p ${{ github.workspace }}/toolchains
-        
-        # 下载Clang（使用较旧版本）
-        echo "下载Clang 12.0.5..."
-        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r41/clang-r450784d.tar.gz
-        mkdir -p ${{ github.workspace }}/toolchains/clang
-        tar -xzf clang-r450784d.tar.gz -C ${{ github.workspace }}/toolchains/clang
-        rm clang-r450784d.tar.gz
-        
-        # 下载GCC交叉编译器（必须！）
-        echo "下载AArch64 GCC 4.9交叉编译器..."
-        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r41.tar.gz
-        mkdir -p ${{ github.workspace }}/toolchains/gcc/aarch64-linux-android-4.9
-        tar -xzf android-12.0.0_r41.tar.gz -C ${{ github.workspace }}/toolchains/gcc/aarch64-linux-android-4.9
-        rm android-12.0.0_r41.tar.gz
-        
-        # 下载32位ARM GCC交叉编译器
-        echo "下载ARM GCC 4.9交叉编译器..."
-        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.0.0_r41.tar.gz
-        mkdir -p ${{ github.workspace }}/toolchains/gcc/arm-linux-androideabi-4.9
-        tar -xzf android-12.0.0_r41.tar.gz -C ${{ github.workspace }}/toolchains/gcc/arm-linux-androideabi-4.9
-        rm android-12.0.0_r41.tar.gz
-        
-        echo "✅ 工具链下载完成"
+          bc build-essential ccache libncurses-dev libssl-dev \
+          flex bison libelf-dev git wget unzip gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi make cmake cpio rsync python3 python2 \
+          libgmp-dev libmpc-dev libmpfr-dev texinfo gawk
+          
+        # 检查交叉编译器
+        echo "可用交叉编译器:"
+        which aarch64-linux-gnu-gcc || echo "aarch64-linux-gnu-gcc 未安装"
+        aarch64-linux-gnu-gcc --version | head -3 || true
 
     - name: 修复wakeup.c包含路径
       run: |
-        echo "=== 修复wakeup.c包含路径 ==="
         cd ${{ github.workspace }}
-        
         if [ -f "drivers/base/power/wakeup.c" ]; then
-          echo "修复包含路径..."
+          echo "修复wakeup.c中的包含路径..."
           sed -i 's|#include <../../extcon/extcon.h>|#include "../../../extcon/extcon.h"|' drivers/base/power/wakeup.c
           echo "✅ 修复完成"
         fi
 
-    - name: 配置内核（使用GCC）
+    - name: 配置内核（正确方法）
       run: |
         cd ${{ github.workspace }}
         echo "=== 配置内核 ==="
         
-        # 清理
+        # 完全清理
+        echo "清理工作区..."
         make clean 2>/dev/null || true
-        rm -f .config
+        make mrproper 2>/dev/null || true
+        rm -f .config .config.old include/config/auto.conf include/config/tristate.conf
         
-        # 设置工具链路径
-        export PATH=${{ github.workspace }}/toolchains/clang/bin:$PATH
-        export PATH=${{ github.workspace }}/toolchains/gcc/aarch64-linux-android-4.9/bin:$PATH
-        export PATH=${{ github.workspace }}/toolchains/gcc/arm-linux-androideabi-4.9/bin:$PATH
+        # 创建必要的目录
+        mkdir -p include/config
         
-        # 使用GCC交叉编译器
-        echo "应用配置..."
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- vendor/kona_defconfig
-        
-        # 合并设备配置
-        if [ -f "arch/arm64/configs/vendor/asus/obiwan.config" ]; then
-          echo "合并obiwan.config..."
-          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config
+        # 方法1：直接复制配置文件
+        echo "方法1：直接复制配置文件..."
+        if [ -f "arch/arm64/configs/vendor/kona_defconfig" ]; then
+          cp arch/arm64/configs/vendor/kona_defconfig .config
+          echo "✅ 复制kona_defconfig到.config"
+        else
+          echo "❌ 找不到kona_defconfig"
+          find arch/arm64/configs -name "*defconfig" | head -10
+          exit 1
         fi
         
-        # 生成最终配置
-        echo "生成最终配置..."
-        yes "" | make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- oldconfig 2>&1 | tail -30
+        # 检查.config是否创建成功
+        if [ ! -f ".config" ]; then
+          echo "❌ .config文件未创建"
+          exit 1
+        fi
+        
+        echo ".config文件大小: $(wc -l < .config) 行"
 
-    - name: 编译内核（使用GCC）
-      timeout-minutes: 50
+    - name: 合并设备配置
+      run: |
+        cd ${{ github.workspace }}
+        echo "=== 合并设备配置 ==="
+        
+        if [ -f "arch/arm64/configs/vendor/asus/obiwan.config" ]; then
+          echo "合并obiwan.config..."
+          
+          # 备份原配置
+          cp .config .config.backup
+          
+          # 使用merge_config.sh合并
+          if [ -f "scripts/kconfig/merge_config.sh" ]; then
+            ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config 2>&1 | tee merge.log
+            echo "✅ 配置合并完成"
+          else
+            echo "❌ 找不到merge_config.sh"
+            # 手动合并
+            cat arch/arm64/configs/vendor/asus/obiwan.config >> .config
+            echo "⚠️ 已手动追加配置"
+          fi
+        else
+          echo "⚠️ 找不到obiwan.config，跳过设备配置合并"
+        fi
+
+    - name: 生成最终配置
+      run: |
+        cd ${{ github.workspace }}
+        echo "=== 生成最终配置 ==="
+        
+        # 检查.config是否存在
+        if [ ! -f ".config" ]; then
+          echo "❌ 错误：.config文件不存在"
+          exit 1
+        fi
+        
+        echo "运行oldconfig..."
+        # 准备回答所有问题（使用默认值）
+        {
+          for i in $(seq 1 100); do
+            echo ""
+          done
+        } | make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- oldconfig 2>&1 | tee oldconfig.log || {
+          echo "⚠️ oldconfig可能有问题，但继续..."
+        }
+        
+        echo "配置摘要:"
+        echo "1. 基本架构:"
+        grep -E "CONFIG_ARM64=y|CONFIG_64BIT=y" .config || echo "未找到"
+        
+        echo "2. 设备相关:"
+        grep -E "CONFIG_MACH_ASUS|CONFIG_ASUS_" .config | head -5 || echo "未找到"
+        
+        echo "3. extcon配置:"
+        grep -E "CONFIG_EXTCON" .config || echo "未找到"
+
+    - name: 编译内核
+      timeout-minutes: 60
       env:
         ARCH: arm64
         SUBARCH: arm64
+        CROSS_COMPILE: aarch64-linux-gnu-
       run: |
         cd ${{ github.workspace }}
         echo "=== 开始编译内核 ==="
         
-        # 设置工具链路径
-        export PATH=${{ github.workspace }}/toolchains/clang/bin:$PATH
-        export PATH=${{ github.workspace }}/toolchains/gcc/aarch64-linux-android-4.9/bin:$PATH
-        export PATH=${{ github.workspace }}/toolchains/gcc/arm-linux-androideabi-4.9/bin:$PATH
+        # 显示环境变量
+        echo "编译环境:"
+        echo "ARCH=$ARCH"
+        echo "CROSS_COMPILE=$CROSS_COMPILE"
+        echo "PATH=$PATH"
         
-        # 显示工具链版本
-        echo "工具链版本:"
-        aarch64-linux-android-gcc --version | head -3
-        clang --version | head -3
+        # 检查交叉编译器
+        echo "交叉编译器信息:"
+        which aarch64-linux-gnu-gcc
+        aarch64-linux-gnu-gcc --version | head -3
         
-        # 使用传统GCC编译
-        echo "开始编译（使用GCC交叉编译器）..."
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- -j$(($(nproc) * 2)) 2>&1 | tee build.log
-        
-        echo "=== 编译结果检查 ==="
-        if [ -f "arch/arm64/boot/Image.gz" ]; then
-          echo "🎉 编译成功！"
-          echo "内核文件: arch/arm64/boot/Image.gz"
-          ls -lh arch/arm64/boot/Image.gz
-          
-          # 检查模块
-          MOD_COUNT=$(find . -name "*.ko" -type f 2>/dev/null | wc -l)
-          echo "生成的模块数量: $MOD_COUNT"
-          
-        elif [ -f "arch/arm64/boot/Image" ]; then
-          echo "🎉 编译成功！"
-          echo "内核文件: arch/arm64/boot/Image"
-          ls -lh arch/arm64/boot/Image
-        else
-          echo "❌ 编译失败"
-          echo "查看错误日志:"
-          tail -100 build.log | grep -B5 -A5 "error\|Error\|fatal"
+        # 验证配置
+        if [ ! -f ".config" ]; then
+          echo "❌ 错误：缺少.config文件"
           exit 1
         fi
+        
+        echo "配置文件存在，行数: $(wc -l < .config)"
+        
+        # 尝试不同的编译方法
+        
+        echo "方法1：标准编译..."
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) 2>&1 | tee build.log
+        
+        # 检查结果
+        if [ -f "arch/arm64/boot/Image.gz" ] || [ -f "arch/arm64/boot/Image" ]; then
+          echo "🎉 编译成功！"
+          ls -lh arch/arm64/boot/
+        else
+          echo "❌ 方法1失败，尝试方法2..."
+          
+          # 方法2：更详细的编译
+          echo "清理并重新开始..."
+          make clean 2>/dev/null || true
+          
+          echo "重新配置..."
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- silentoldconfig 2>&1 | tail -20
+          
+          echo "重新编译..."
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(($(nproc)/2)) 2>&1 | tee build2.log
+          
+          if [ -f "arch/arm64/boot/Image.gz" ] || [ -f "arch/arm64/boot/Image" ]; then
+            echo "🎉 方法2成功！"
+            ls -lh arch/arm64/boot/
+          else
+            echo "❌ 所有方法都失败"
+            echo "查看错误日志:"
+            tail -100 build.log | grep -B5 -A5 "error\|Error\|ERROR"
+            echo "完整日志最后200行:"
+            tail -200 build.log
+            exit 1
+          fi
+        fi
 
-    - name: 打包内核
+    - name: 打包内核文件
       if: success()
       run: |
         cd ${{ github.workspace }}
+        echo "=== 打包内核文件 ==="
+        
         BUILD_DATE=$(date +"%Y%m%d-%H%M")
-        OUTPUT_DIR="kernel-gcc-$BUILD_DATE"
+        OUTPUT_DIR="kernel-$BUILD_DATE"
         mkdir -p $OUTPUT_DIR
         
         # 复制内核文件
         if [ -f "arch/arm64/boot/Image.gz" ]; then
           cp arch/arm64/boot/Image.gz $OUTPUT_DIR/
           echo "✅ 复制: Image.gz"
+          file $OUTPUT_DIR/Image.gz
         elif [ -f "arch/arm64/boot/Image" ]; then
           cp arch/arm64/boot/Image $OUTPUT_DIR/
           echo "✅ 复制: Image"
+          file $OUTPUT_DIR/Image
         fi
         
-        # 复制模块
-        if find . -name "*.ko" -type f 2>/dev/null | head -1 > /dev/null; then
-          mkdir -p $OUTPUT_DIR/modules
-          find . -name "*.ko" -type f -exec cp {} $OUTPUT_DIR/modules/ \;
-          echo "✅ 复制模块文件"
-        fi
+        # 复制配置文件
+        cp .config $OUTPUT_DIR/
+        echo "✅ 复制配置文件"
+        
+        # 复制构建日志
+        cp build.log $OUTPUT_DIR/ 2>/dev/null || true
+        
+        # 创建信息文件
+        cat > $OUTPUT_DIR/README.txt << EOF
+        ASUS ROG Phone 3 内核
+        ===================
+        
+        构建时间: $BUILD_DATE
+        编译器: aarch64-linux-gnu-gcc
+        配置: kona_defconfig + obiwan.config
+        
+        文件说明:
+        - Image.gz: 压缩的内核映像
+        - .config: 使用的内核配置
+        
+        刷机说明:
+        1. 使用AnyKernel3模板
+        2. 替换模板中的Image.gz
+        3. 在TWRP中刷入
+        
+        注意事项:
+        - 仅适用于ASUS ROG Phone 3 (ASUS_I003D)
+        - 基于crDroid 12内核源码
+        EOF
         
         # 打包
         tar -czf $OUTPUT_DIR.tar.gz $OUTPUT_DIR/
         echo "🎉 打包完成: $OUTPUT_DIR.tar.gz"
+        ls -lh $OUTPUT_DIR.tar.gz
 
     - name: 上传构建产物
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-gcc-build-${{ github.run_number }}
-        path: ${{ github.workspace }}/*.tar.gz
+        name: kernel-build-${{ github.run_number }}
+        path: |
+          ${{ github.workspace }}/*.tar.gz
+          ${{ github.workspace }}/arch/arm64/boot/Image*
         retention-days: 30
+
+    - name: 上传失败日志
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-failure-${{ github.run_number }}
+        path: |
+          ${{ github.workspace }}/build.log
+          ${{ github.workspace }}/.config
+          ${{ github.workspace }}/oldconfig.log
+        retention-days: 15

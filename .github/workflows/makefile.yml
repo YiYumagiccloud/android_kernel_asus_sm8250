@@ -26,7 +26,7 @@ jobs:
               # 只有这样，脚本才能在 Google 服务器上成功找到对应的 GCC 分支。
               android-version: 12
               # 3. 虽然 Android 环境是 12，但我们可以强制 Clang 使用新版本来适配安卓 16 内核
-              aosp-clang-version: r450784d
+
               # 4. 这里的参数非常关键，确保编译器行为正确
               extra-make-args: "LLVM=1 LLVM_IAS=1"
               disable-lto: true

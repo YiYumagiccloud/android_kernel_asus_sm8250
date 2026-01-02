@@ -37,11 +37,16 @@ jobs:
           restore-keys: |
             kernel-ccache-
 
-      - name: Download AOSP Clang
+      - name: Download AOSP Clang (prebuilt)
         run: |
           mkdir -p toolchains
           cd toolchains
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
+      
+          CLANG_VERSION=clang-r536225
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/${CLANG_VERSION}.tar.gz
+      
+          mkdir clang
+          tar -xf ${CLANG_VERSION}.tar.gz -C clang
 
       - name: Set build environment
         run: |

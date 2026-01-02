@@ -23,11 +23,11 @@ jobs:
               config: vendor/kona-perf_defconfig
               arch: arm64
               # 4. 现代内核通常强制使用 Clang
-              aosp-gcc: true
+              aosp-gcc: false
               aosp-clang: true
-              # 5. 关键：安卓 15/16 对应的 AOSP Clang 版本建议使用 r522815 或更高
-              android-version: 14
-              aosp-clang-version: r487747c
+              # 5. 建议使用这个更稳妥的版本
+              android-version: 12
+              aosp-clang-version: r450784d
               # 6. 其他功能开关
               disable-lto: true
               anykernel3: true

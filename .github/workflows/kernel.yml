@@ -13,15 +13,15 @@ jobs:
           kernel-url: https://github.com/YiYumagiccloud/android_kernel_asus_sm8250
           kernel-branch: lineage-23.0
           
-          # 核心配置：基础 + 华硕补丁
+          # 依然使用这两个配置
           config: vendor/kona-perf_defconfig vendor/asus/obiwan.config
           arch: arm64
           
-          # 编译器修复
+          # 1. 尝试使用这个更兼容的版本
           aosp-clang: true
-          aosp-clang-version: r522815
-          # 必须添加下面这一行，解决 "AOSP GCC is required" 错误
+          aosp-clang-version: r450784d
+          
+          # 2. 必须保留 GCC，否则会报你上次那个错
           aosp-gcc: true
           
-          # 打包设置
           anykernel3: true

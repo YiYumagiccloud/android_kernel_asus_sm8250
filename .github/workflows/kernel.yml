@@ -1,7 +1,7 @@
 name: Build ROG3 Android 16 Kernel
 
 on:
-  workflow_dispatch: # 允许你手动点击按钮开始编译
+  workflow_dispatch:
 
 jobs:
   build-kernel:
@@ -10,24 +10,18 @@ jobs:
       - name: Build Kernel
         uses: dabao1955/kernel_build_action@main
         with:
-          # 1. 指向你自己的仓库和 Android 16 分支
           kernel-url: https://github.com/YiYumagiccloud/android_kernel_asus_sm8250
           kernel-branch: lineage-23.0
           
-          # 2. 核心配置：先读基础平台配置，再读华硕设备补丁配置
+          # 核心配置：基础 + 华硕补丁
           config: vendor/kona-perf_defconfig vendor/asus/obiwan.config
           arch: arm64
           
-          # 3. 编译器设置 (针对 Android 16 / Lineage 23 优化)
-          # 使用较新版本的 Clang 以匹配 Android 16 的要求
+          # 编译器修复
           aosp-clang: true
-          aosp-clang-version: r522815 
-          llvm: true
+          aosp-clang-version: r522815
+          # 必须添加下面这一行，解决 "AOSP GCC is required" 错误
+          aosp-gcc: true
           
-          # 4. 打包设置
-          # 编译完成后自动打包成 AnyKernel3 格式的 .zip，方便在 Recovery 中直接刷入
+          # 打包设置
           anykernel3: true
-          
-          # 5. 额外参数 (可选)
-          # 如果你想集成 KernelSU 这种 Root 工具，可以将下面这行取消注释
-          # ksuneext: true

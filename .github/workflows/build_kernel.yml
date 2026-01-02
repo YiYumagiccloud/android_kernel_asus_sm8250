@@ -1,7 +1,9 @@
-name: 构建ASUS ROG Phone 3内核（简易工具链）
+name: 构建ASUS ROG Phone 3内核（正确工具链）
 
 on:
   push:
+    branches: [ lineage-23.0 ]
+  pull_request:
     branches: [ lineage-23.0 ]
   workflow_dispatch:
 
@@ -19,75 +21,159 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          bc build-essential ccache libncurses-dev libssl-dev \
-          flex bison libelf-dev git wget unzip gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi
-          
-        # 安装gcc-10（兼容性更好）
-        sudo apt-get install -y gcc-10-aarch64-linux-gnu gcc-10-arm-linux-gnueabi
+          bc bison build-essential ccache curl flex gcc-multilib \
+          g++-multilib git gnupg gperf imagemagick lib32ncurses-dev \
+          lib32readline-dev lib32z1-dev libelf-dev liblz4-tool \
+          libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
+          lzop pngcrush rsync schedtool squashfs-tools xsltproc \
+          zip zlib1g-dev python3 python3-pip unzip wget libncurses-dev bzip2
+        pip3 install --user pycryptodome
 
-    - name: 修复wakeup.c
+    - name: 下载AOSP工具链
+      run: |
+        echo "=== 下载AOSP预构建工具链 ==="
+        
+        # 创建工具链目录
+        mkdir -p ${{ github.workspace }}/toolchains
+        
+        # 下载Clang（使用较旧版本）
+        echo "下载Clang 12.0.5..."
+        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-12.0.0_r41/clang-r450784d.tar.gz
+        mkdir -p ${{ github.workspace }}/toolchains/clang
+        tar -xzf clang-r450784d.tar.gz -C ${{ github.workspace }}/toolchains/clang
+        rm clang-r450784d.tar.gz
+        
+        # 下载GCC交叉编译器（必须！）
+        echo "下载AArch64 GCC 4.9交叉编译器..."
+        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r41.tar.gz
+        mkdir -p ${{ github.workspace }}/toolchains/gcc/aarch64-linux-android-4.9
+        tar -xzf android-12.0.0_r41.tar.gz -C ${{ github.workspace }}/toolchains/gcc/aarch64-linux-android-4.9
+        rm android-12.0.0_r41.tar.gz
+        
+        # 下载32位ARM GCC交叉编译器
+        echo "下载ARM GCC 4.9交叉编译器..."
+        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.0.0_r41.tar.gz
+        mkdir -p ${{ github.workspace }}/toolchains/gcc/arm-linux-androideabi-4.9
+        tar -xzf android-12.0.0_r41.tar.gz -C ${{ github.workspace }}/toolchains/gcc/arm-linux-androideabi-4.9
+        rm android-12.0.0_r41.tar.gz
+        
+        echo "✅ 工具链下载完成"
+
+    - name: 修复wakeup.c包含路径
+      run: |
+        echo "=== 修复wakeup.c包含路径 ==="
+        cd ${{ github.workspace }}
+        
+        if [ -f "drivers/base/power/wakeup.c" ]; then
+          echo "修复包含路径..."
+          sed -i 's|#include <../../extcon/extcon.h>|#include "../../../extcon/extcon.h"|' drivers/base/power/wakeup.c
+          echo "✅ 修复完成"
+        fi
+
+    - name: 配置内核（使用GCC）
       run: |
         cd ${{ github.workspace }}
-        sed -i 's|#include <../../extcon/extcon.h>|#include "../../../extcon/extcon.h"|' drivers/base/power/wakeup.c
-
-    - name: 编译内核（使用系统GCC）
-      timeout-minutes: 60
-      run: |
-        cd ${{ github.workspace }}
+        echo "=== 配置内核 ==="
         
         # 清理
         make clean 2>/dev/null || true
         rm -f .config
         
-        # 使用系统自带的GCC交叉编译器
-        echo "使用系统GCC交叉编译器..."
+        # 设置工具链路径
+        export PATH=${{ github.workspace }}/toolchains/clang/bin:$PATH
+        export PATH=${{ github.workspace }}/toolchains/gcc/aarch64-linux-android-4.9/bin:$PATH
+        export PATH=${{ github.workspace }}/toolchains/gcc/arm-linux-androideabi-4.9/bin:$PATH
         
-        # 尝试不同的交叉编译器前缀
-        COMPILERS=("aarch64-linux-gnu-" "aarch64-linux-gnu-gcc-10" "aarch64-linux-gnu-gcc-9")
+        # 使用GCC交叉编译器
+        echo "应用配置..."
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- vendor/kona_defconfig
         
-        for compiler in "${COMPILERS[@]}"; do
-          if which ${compiler}gcc >/dev/null 2>&1; then
-            echo "使用编译器: ${compiler}"
-            export CROSS_COMPILE="${compiler}"
-            break
-          fi
-        done
-        
-        if [ -z "$CROSS_COMPILE" ]; then
-          echo "❌ 未找到合适的交叉编译器"
-          exit 1
-        fi
-        
-        # 配置内核
-        make ARCH=arm64 $CROSS_COMPILE vendor/kona_defconfig
-        
+        # 合并设备配置
         if [ -f "arch/arm64/configs/vendor/asus/obiwan.config" ]; then
+          echo "合并obiwan.config..."
           ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config
         fi
         
-        yes "" | make ARCH=arm64 $CROSS_COMPILE oldconfig
+        # 生成最终配置
+        echo "生成最终配置..."
+        yes "" | make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- oldconfig 2>&1 | tail -30
+
+    - name: 编译内核（使用GCC）
+      timeout-minutes: 50
+      env:
+        ARCH: arm64
+        SUBARCH: arm64
+      run: |
+        cd ${{ github.workspace }}
+        echo "=== 开始编译内核 ==="
         
-        # 开始编译
-        echo "开始编译..."
-        make ARCH=arm64 $CROSS_COMPILE -j$(nproc) 2>&1 | tee build.log
+        # 设置工具链路径
+        export PATH=${{ github.workspace }}/toolchains/clang/bin:$PATH
+        export PATH=${{ github.workspace }}/toolchains/gcc/aarch64-linux-android-4.9/bin:$PATH
+        export PATH=${{ github.workspace }}/toolchains/gcc/arm-linux-androideabi-4.9/bin:$PATH
         
-        # 检查结果
-        if [ -f "arch/arm64/boot/Image.gz" ] || [ -f "arch/arm64/boot/Image" ]; then
+        # 显示工具链版本
+        echo "工具链版本:"
+        aarch64-linux-android-gcc --version | head -3
+        clang --version | head -3
+        
+        # 使用传统GCC编译
+        echo "开始编译（使用GCC交叉编译器）..."
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- -j$(($(nproc) * 2)) 2>&1 | tee build.log
+        
+        echo "=== 编译结果检查 ==="
+        if [ -f "arch/arm64/boot/Image.gz" ]; then
           echo "🎉 编译成功！"
-          ls -lh arch/arm64/boot/
+          echo "内核文件: arch/arm64/boot/Image.gz"
+          ls -lh arch/arm64/boot/Image.gz
+          
+          # 检查模块
+          MOD_COUNT=$(find . -name "*.ko" -type f 2>/dev/null | wc -l)
+          echo "生成的模块数量: $MOD_COUNT"
+          
+        elif [ -f "arch/arm64/boot/Image" ]; then
+          echo "🎉 编译成功！"
+          echo "内核文件: arch/arm64/boot/Image"
+          ls -lh arch/arm64/boot/Image
         else
           echo "❌ 编译失败"
-          tail -50 build.log
+          echo "查看错误日志:"
+          tail -100 build.log | grep -B5 -A5 "error\|Error\|fatal"
           exit 1
         fi
 
-    - name: 上传内核
+    - name: 打包内核
+      if: success()
+      run: |
+        cd ${{ github.workspace }}
+        BUILD_DATE=$(date +"%Y%m%d-%H%M")
+        OUTPUT_DIR="kernel-gcc-$BUILD_DATE"
+        mkdir -p $OUTPUT_DIR
+        
+        # 复制内核文件
+        if [ -f "arch/arm64/boot/Image.gz" ]; then
+          cp arch/arm64/boot/Image.gz $OUTPUT_DIR/
+          echo "✅ 复制: Image.gz"
+        elif [ -f "arch/arm64/boot/Image" ]; then
+          cp arch/arm64/boot/Image $OUTPUT_DIR/
+          echo "✅ 复制: Image"
+        fi
+        
+        # 复制模块
+        if find . -name "*.ko" -type f 2>/dev/null | head -1 > /dev/null; then
+          mkdir -p $OUTPUT_DIR/modules
+          find . -name "*.ko" -type f -exec cp {} $OUTPUT_DIR/modules/ \;
+          echo "✅ 复制模块文件"
+        fi
+        
+        # 打包
+        tar -czf $OUTPUT_DIR.tar.gz $OUTPUT_DIR/
+        echo "🎉 打包完成: $OUTPUT_DIR.tar.gz"
+
+    - name: 上传构建产物
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-build
-        path: |
-          ${{ github.workspace }}/arch/arm64/boot/Image*
-          ${{ github.workspace }}/.config
+        name: kernel-gcc-build-${{ github.run_number }}
+        path: ${{ github.workspace }}/*.tar.gz
         retention-days: 30

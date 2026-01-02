@@ -1,27 +1,76 @@
-name: Build ROG3 Android 16 Kernel
+name: Build ROG Phone 3 Kernel (lineage-23.0)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - lineage-23.0
 
 jobs:
-  build-kernel:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-22.04
+
     steps:
-      - name: Build Kernel
-        uses: dabao1955/kernel_build_action@main
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
         with:
-          kernel-url: https://github.com/YiYumagiccloud/android_kernel_asus_sm8250
-          kernel-branch: lineage-23.0
-          
-          # 依然使用这两个配置
-          config: vendor/kona-perf_defconfig vendor/asus/obiwan.config
-          arch: arm64
-          
-          # 1. 尝试使用这个更兼容的版本
-          aosp-clang: true
-          aosp-clang-version: r450784d
-          
-          # 2. 必须保留 GCC，否则会报你上次那个错
-          aosp-gcc: true
-          
-          anykernel3: true
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison flex git \
+            build-essential \
+            libssl-dev \
+            libncurses-dev \
+            libelf-dev \
+            dwarves \
+            python3 \
+            ccache
+
+      - name: Setup ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: kernel-ccache-${{ github.ref }}
+          restore-keys: |
+            kernel-ccache-
+
+      - name: Download AOSP Clang
+        run: |
+          mkdir -p toolchains
+          cd toolchains
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
+
+      - name: Set build environment
+        run: |
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "LLVM=1" >> $GITHUB_ENV
+          echo "LLVM_IAS=1" >> $GITHUB_ENV
+          echo "CCACHE=ccache" >> $GITHUB_ENV
+          echo "PATH=$PWD/toolchains/clang/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Kernel defconfig (kona + obiwan)
+        run: |
+          make vendor/kona_defconfig
+          scripts/kconfig/merge_config.sh \
+            arch/arm64/configs/vendor/kona_defconfig \
+            arch/arm64/configs/vendor/asus/obiwan.config
+
+      - name: Build kernel
+        run: |
+          make -j$(nproc)
+
+      - name: Package artifacts
+        run: |
+          mkdir -p out-artifacts
+          cp -v arch/arm64/boot/Image* out-artifacts/ || true
+          cp -v arch/arm64/boot/dts/qcom/*.dtb out-artifacts/ || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROG-Phone-3-kernel
+          path: out-artifacts

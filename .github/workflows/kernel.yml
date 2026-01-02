@@ -1,4 +1,4 @@
-name: Build ROG Phone 3 Kernel (lineage-23.0)
+name: Build Asus ROG Phone 3 Kernel (lineage-23.0)
 
 on:
   workflow_dispatch:
@@ -11,11 +11,13 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      # 1️⃣ 拉源码
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # 2️⃣ 安装依赖
       - name: Install build dependencies
         run: |
           sudo apt update
@@ -27,8 +29,10 @@ jobs:
             libelf-dev \
             dwarves \
             python3 \
+            wget \
             ccache
 
+      # 3️⃣ ccache（可选但推荐）
       - name: Setup ccache
         uses: actions/cache@v4
         with:
@@ -37,46 +41,53 @@ jobs:
           restore-keys: |
             kernel-ccache-
 
+      # 4️⃣ 下载 AOSP 官方 Clang（tarball，稳定）
       - name: Download AOSP Clang (prebuilt)
         run: |
           mkdir -p toolchains
           cd toolchains
-      
+
           CLANG_VERSION=clang-r536225
           wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/${CLANG_VERSION}.tar.gz
-      
+
           mkdir clang
           tar -xf ${CLANG_VERSION}.tar.gz -C clang
 
+      # 5️⃣ 设置环境变量（关键：使用 LLVM IAS）
       - name: Set build environment
         run: |
           echo "ARCH=arm64" >> $GITHUB_ENV
           echo "SUBARCH=arm64" >> $GITHUB_ENV
           echo "LLVM=1" >> $GITHUB_ENV
-          echo "LLVM_IAS=0" >> $GITHUB_ENV
+          echo "LLVM_IAS=1" >> $GITHUB_ENV
           echo "CCACHE=ccache" >> $GITHUB_ENV
           echo "PATH=$PWD/toolchains/clang/bin:$PATH" >> $GITHUB_ENV
 
-
+      # 6️⃣ 内核配置（kona + obiwan overlay）
       - name: Kernel defconfig (kona + obiwan)
         run: |
           make vendor/kona_defconfig
+
+          # 合并 Asus ROG Phone 3 的配置
           scripts/kconfig/merge_config.sh \
             arch/arm64/configs/vendor/kona_defconfig \
             arch/arm64/configs/vendor/asus/obiwan.config
 
+      # 7️⃣ 构建内核
       - name: Build kernel
         run: |
           make -j$(nproc)
 
+      # 8️⃣ 收集产物
       - name: Package artifacts
         run: |
           mkdir -p out-artifacts
           cp -v arch/arm64/boot/Image* out-artifacts/ || true
           cp -v arch/arm64/boot/dts/qcom/*.dtb out-artifacts/ || true
 
+      # 9️⃣ 上传产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ROG-Phone-3-kernel
+          name: ROG-Phone-3-kernel-lineage-23.0
           path: out-artifacts

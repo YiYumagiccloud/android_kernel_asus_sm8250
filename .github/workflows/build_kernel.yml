@@ -1,4 +1,4 @@
-name: 构建ASUS ROG Phone 3内核
+name: 构建ASUS ROG Phone 3内核（extcon修复版）
 
 on:
   push:
@@ -38,100 +38,139 @@ jobs:
           lib32readline-dev lib32z1-dev libelf-dev liblz4-tool \
           libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
           lzop pngcrush rsync schedtool squashfs-tools xsltproc \
-          zip zlib1g-dev python3 python3-pip unzip wget
+          zip zlib1g-dev python3 python3-pip unzip wget libncurses-dev bzip2
         pip3 install --user pycryptodome
 
-    - name: 下载编译工具链（修复版）
+    - name: 下载编译工具链
       run: |
         echo "=== 下载编译工具链 ==="
         
-        # 方法1：使用预编译的Android NDK（推荐）
-        echo "下载Android NDK（包含完整工具链）..."
-        NDK_VERSION="r26b"
-        wget -q https://dl.google.com/android/repository/android-ndk-$NDK_VERSION-linux.zip
-        unzip -q android-ndk-$NDK_VERSION-linux.zip
-        mv android-ndk-$NDK_VERSION ndk
+        # 下载Android NDK
+        echo "下载Android NDK r26b..."
+        wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+        unzip -q android-ndk-r26b-linux.zip
+        mv android-ndk-r26b ndk
         
-        # 设置工具链路径
-        export NDK_PATH="${{ github.workspace }}/ndk"
-        export CLANG_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        export AARCH64_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        export ARM32_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        
-        # 创建符号链接以便make能找到
-        mkdir -p clang
-        ln -sf $CLANG_PATH/clang clang/
-        ln -sf $CLANG_PATH/clang++ clang/
-        
-        mkdir -p aarch64-linux-android-4.9/bin
-        ln -sf $AARCH64_PATH/aarch64-linux-android21-clang aarch64-linux-android-4.9/bin/aarch64-linux-android-gcc
-        ln -sf $AARCH64_PATH/aarch64-linux-android21-clang++ aarch64-linux-android-4.9/bin/aarch64-linux-android-g++
-        
-        mkdir -p arm-linux-androideabi-4.9/bin
-        ln -sf $ARM32_PATH/armv7a-linux-androideabi21-clang arm-linux-androideabi-4.9/bin/arm-linux-androideabi-gcc
-        ln -sf $ARM32_PATH/armv7a-linux-androideabi21-clang++ arm-linux-androideabi-4.9/bin/arm-linux-androideabi-g++
-        
-        echo "工具链版本信息："
-        $CLANG_PATH/clang --version | head -5
-        ls -la $CLANG_PATH/clang*
-        
-        echo "=== 工具链准备完成 ==="
+        echo "工具链版本:"
+        ${{ github.workspace }}/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/clang --version | head -3
 
     - name: 设置环境变量
       run: |
         echo "设置编译环境变量..."
         
-        # NDK路径
         NDK_PATH="${{ github.workspace }}/ndk"
+        CLANG_PATH="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
         
-        # 使用NDK中的Clang
-        echo "CLANG_PATH=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
-        echo "AARCH64_PATH=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
-        echo "ARM32_PATH=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_ENV
+        echo "CLANG_PATH=$CLANG_PATH" >> $GITHUB_ENV
+        echo "PATH=$CLANG_PATH:$PATH" >> $GITHUB_ENV
         
-        # 更新PATH
-        echo "PATH=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin:${{ github.workspace }}/clang/bin:${{ github.workspace }}/aarch64-linux-android-4.9/bin:${{ github.workspace }}/arm-linux-androideabi-4.9/bin:$PATH" >> $GITHUB_ENV
-        
-        # 编译变量 - 使用NDK的Clang
+        # 使用LLVM工具链
         echo "CC=clang" >> $GITHUB_ENV
-        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        
-        # 对于NDK，CROSS_COMPILE设置不同
         echo "CROSS_COMPILE=aarch64-linux-android21-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=armv7a-linux-androideabi21-" >> $GITHUB_ENV
         
+        # 启用LLVM
         echo "LLVM=1" >> $GITHUB_ENV
         echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
 
-    - name: 准备配置文件
+    - name: 配置内核
       run: |
-        echo "=== 准备内核配置文件 ==="
         cd ${{ github.workspace }}
+        echo "=== 配置内核 ==="
         
-        # 检查配置文件是否存在
-        echo "检查配置文件..."
-        ls -la arch/arm64/configs/vendor/
-        ls -la arch/arm64/configs/vendor/asus/
+        # 清理
+        make clean 2>/dev/null || true
+        rm -f .config
         
-        echo "使用ASUS ROG Phone 3专用配置 (obiwan)"
-        # 方法1：直接使用obiwan配置（如果它是完整配置）
+        # 使用基础配置
+        echo "应用kona_defconfig..."
+        make ARCH=arm64 LLVM=1 LLVM_IAS=1 vendor/kona_defconfig
+        
+        # 合并设备配置
         if [ -f "arch/arm64/configs/vendor/asus/obiwan.config" ]; then
-          echo "找到obiwan.config，尝试作为基础配置"
-          # 先复制一个基础配置
-          cp arch/arm64/configs/vendor/kona_defconfig .config
-          # 合并设备配置
-          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config 2>/dev/null || true
-        else
-          # 如果obiwan.config不存在，使用kona_defconfig
-          cp arch/arm64/configs/vendor/kona_defconfig .config
+          echo "合并obiwan.config..."
+          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config
         fi
         
-        # 检查.config文件
-        echo "生成的.config文件前20行："
-        head -20 .config || true
+        echo "检查extcon相关配置..."
+        grep -E "CONFIG_EXTCON" .config || echo "extcon配置未启用"
 
-    - name: 编译内核（简化版）
-      timeout-minutes: 30
+    - name: 修复编译配置
+      run: |
+        cd ${{ github.workspace }}
+        echo "=== 修复编译配置 ==="
+        
+        # 方法1：启用extcon驱动（正确的方法）
+        echo "启用extcon驱动..."
+        ./scripts/config --enable CONFIG_EXTCON
+        
+        # 启用一些常用的extcon驱动
+        ./scripts/config --module CONFIG_EXTCON_ADC_JACK
+        ./scripts/config --module CONFIG_EXTCON_USB_GPIO
+        ./scripts/config --module CONFIG_EXTCON_MAX77693
+        ./scripts/config --module CONFIG_EXTCON_PALMAS
+        
+        # 检查并修复头文件路径问题
+        echo "检查头文件包含路径..."
+        
+        # 确保drivers目录在包含路径中
+        if [ -f "drivers/base/power/wakeup.c" ]; then
+          echo "检查wakeup.c中的包含..."
+          head -30 drivers/base/power/wakeup.c | grep -n "extcon"
+        fi
+        
+        # 查看extcon头文件是否存在
+        if [ -f "drivers/extcon/extcon.h" ]; then
+          echo "✅ extcon.h存在: drivers/extcon/extcon.h"
+          ls -la drivers/extcon/extcon.h
+        else
+          echo "❌ 错误：找不到extcon.h"
+          find . -name "extcon.h" -type f
+        fi
+
+    - name: 解决头文件路径问题
+      run: |
+        cd ${{ github.workspace }}
+        echo "=== 解决头文件路径问题 ==="
+        
+        # 检查问题文件
+        if grep -q "../../extcon/extcon.h" drivers/base/power/wakeup.c; then
+          echo "发现错误的extcon.h包含路径..."
+          
+          # 备份原文件
+          cp drivers/base/power/wakeup.c drivers/base/power/wakeup.c.backup
+          
+          # 修复包含路径（相对路径改为正确路径）
+          sed -i 's|#include <../../extcon/extcon.h>|#include "../../../extcon/extcon.h"|' drivers/base/power/wakeup.c
+          
+          echo "✅ 修复wakeup.c中的包含路径"
+          
+          # 验证修复
+          echo "修复后的包含行:"
+          grep "extcon.h" drivers/base/power/wakeup.c
+        else
+          echo "wakeup.c中未找到错误的extcon.h包含"
+        fi
+        
+        # 检查其他可能的问题
+        echo "检查extcon头文件位置..."
+        find . -path "./drivers/extcon/extcon.h" -type f
+
+    - name: 生成最终配置
+      run: |
+        cd ${{ github.workspace }}
+        echo "=== 生成最终配置 ==="
+        
+        # 生成最终配置（非交互式）
+        echo "运行oldconfig..."
+        printf '\n'.repeat(10) | make ARCH=arm64 LLVM=1 LLVM_IAS=1 oldconfig 2>&1 | tail -50
+        
+        echo "最终extcon配置状态:"
+        grep -E "CONFIG_EXTCON" .config
+
+    - name: 编译内核
+      timeout-minutes: 35
       env:
         ARCH: arm64
         SUBARCH: arm64
@@ -139,123 +178,116 @@ jobs:
         cd ${{ github.workspace }}
         echo "=== 开始编译内核 ==="
         
-        # 清理
-        echo "清理构建目录..."
-        make clean 2>/dev/null || true
+        # 清理输出目录
         rm -rf out 2>/dev/null || true
+        mkdir -p out
         
-        # 显示工具链信息
-        echo "当前工具链："
-        which clang
-        clang --version || true
-        which aarch64-linux-android21-clang || echo "未找到aarch64-linux-android21-clang"
+        echo "使用配置:"
+        grep "CONFIG_EXTCON" .config
         
-        # 方法1：尝试使用传统方式编译
-        echo "尝试方法1：使用defconfig编译..."
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android21- CLANG_TRIPLE=aarch64-linux-gnu- vendor/kona_defconfig 2>&1 | tee config.log
-        
-        # 合并obiwan配置
-        if [ -f "arch/arm64/configs/vendor/asus/obiwan.config" ]; then
-          echo "合并obiwan配置..."
-          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/asus/obiwan.config 2>&1 | tee -a config.log
-        fi
+        echo "编译命令: make ARCH=arm64 LLVM=1 LLVM_IAS=1 O=out -j$(($(nproc) * 2))"
         
         # 开始编译
-        echo "开始内核编译..."
-        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-android21- CLANG_TRIPLE=aarch64-linux-gnu- \
-          CC=clang LD=ld.lld -j$(nproc) 2>&1 | tee build.log
+        time make ARCH=arm64 LLVM=1 LLVM_IAS=1 O=out -j$(($(nproc) * 2)) 2>&1 | tee build.log
         
-        # 检查结果
-        echo "=== 编译结果 ==="
-        if [ -f "arch/arm64/boot/Image.gz" ]; then
-          echo "✅ 成功！找到内核文件: arch/arm64/boot/Image.gz"
-          ls -lh arch/arm64/boot/
-          echo "文件大小: $(du -h arch/arm64/boot/Image.gz | cut -f1)"
-        elif [ -f "arch/arm64/boot/Image" ]; then
-          echo "✅ 成功！找到内核文件: arch/arm64/boot/Image"
-          ls -lh arch/arm64/boot/
+        # 检查编译结果
+        echo "=== 编译结果检查 ==="
+        
+        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
+          echo "✅ 编译成功！"
+          echo "内核文件: out/arch/arm64/boot/Image.gz"
+          ls -lh out/arch/arm64/boot/Image.gz
+          
+          # 检查模块
+          MOD_COUNT=$(find out -name "*.ko" -type f 2>/dev/null | wc -l)
+          echo "生成的模块数量: $MOD_COUNT"
+          
+          # 检查extcon模块
+          echo "extcon相关模块:"
+          find out -name "*extcon*.ko" -type f 2>/dev/null || echo "未找到extcon模块"
+        elif [ -f "out/arch/arm64/boot/Image" ]; then
+          echo "✅ 编译成功！"
+          echo "内核文件: out/arch/arm64/boot/Image"
+          ls -lh out/arch/arm64/boot/Image
         else
-          echo "❌ 编译失败，未找到内核文件"
-          echo "查看错误日志..."
-          tail -50 build.log
-          echo "尝试方法2：使用LLVM工具链..."
-          
-          # 方法2：尝试不同配置
-          make clean 2>/dev/null || true
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 vendor/kona_defconfig 2>&1 | tee config2.log
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 -j$(nproc) 2>&1 | tee build2.log
-          
-          if [ -f "arch/arm64/boot/Image.gz" ] || [ -f "arch/arm64/boot/Image" ]; then
-            echo "✅ 方法2成功！"
-          else
-            echo "❌ 所有方法都失败"
-            exit 1
-          fi
+          echo "❌ 编译失败"
+          echo "查看错误日志:"
+          tail -200 build.log | grep -B5 -A5 "error\|Error\|ERROR"
+          exit 1
         fi
 
-    - name: 打包生成的文件
+    - name: 打包内核
       if: success()
       run: |
         cd ${{ github.workspace }}
         echo "=== 打包内核文件 ==="
         
         BUILD_DATE=$(date +"%Y%m%d-%H%M")
-        OUTPUT_DIR="kernel-obiwan-$BUILD_DATE"
+        OUTPUT_DIR="kernel-asm-${BUILD_DATE}"
         mkdir -p $OUTPUT_DIR
         
-        # 复制内核文件
-        if [ -f "arch/arm64/boot/Image.gz" ]; then
-          cp arch/arm64/boot/Image.gz $OUTPUT_DIR/
-          echo "复制: Image.gz"
-        elif [ -f "arch/arm64/boot/Image" ]; then
-          cp arch/arm64/boot/Image $OUTPUT_DIR/
-          echo "复制: Image"
+        # 复制内核映像
+        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
+          cp out/arch/arm64/boot/Image.gz $OUTPUT_DIR/
+          KERNEL_FILE="Image.gz"
+        elif [ -f "out/arch/arm64/boot/Image" ]; then
+          cp out/arch/arm64/boot/Image $OUTPUT_DIR/
+          KERNEL_FILE="Image"
+        fi
+        
+        # 复制DTB文件
+        if find out/arch/arm64/boot/dts -name "*.dtb" -type f 2>/dev/null | head -1 > /dev/null; then
+          mkdir -p $OUTPUT_DIR/dtb
+          find out/arch/arm64/boot/dts -name "*.dtb" -type f -exec cp {} $OUTPUT_DIR/dtb/ \;
+        fi
+        
+        # 复制模块
+        if find out -name "*.ko" -type f 2>/dev/null | head -1 > /dev/null; then
+          mkdir -p $OUTPUT_DIR/modules
+          find out -name "*.ko" -type f -exec cp {} $OUTPUT_DIR/modules/ \;
+          MOD_COUNT=$(ls $OUTPUT_DIR/modules/*.ko 2>/dev/null | wc -l)
+        else
+          MOD_COUNT=0
         fi
         
         # 复制配置文件
-        cp .config $OUTPUT_DIR/config 2>/dev/null || true
+        cp .config $OUTPUT_DIR/config
         
-        # 复制模块（如果有）
-        find . -name "*.ko" -type f | head -5 | while read module; do
-          mkdir -p $OUTPUT_DIR/modules
-          cp "$module" $OUTPUT_DIR/modules/ 2>/dev/null || true
-        done
-        
-        # 创建信息文件
+        # 创建构建信息
         cat > $OUTPUT_DIR/build-info.txt << EOF
-        设备: ASUS ROG Phone 3 (obiwan)
-        平台: SM8250 (kona)
+        设备: ASUS ROG Phone 3 (ASUS_I003D)
+        代号: obiwan
+        平台: kona (SM8250)
+        内核版本: $(grep "Linux/arm64" out/include/generated/utsrelease.h 2>/dev/null | cut -d'"' -f2 || echo "未知")
         构建时间: $BUILD_DATE
-        工具链: Android NDK r26b
-        编译器: Clang (来自NDK)
+        工具链: Android NDK r26b + Clang
+        文件: $KERNEL_FILE
+        模块: $MOD_COUNT
         配置: kona_defconfig + obiwan.config
-        仓库: ${{ github.repository }}
-        分支: ${{ github.ref_name }}
-        提交: ${{ github.sha }}
+        修复: 已启用extcon驱动并修复头文件路径
         EOF
         
         # 打包
         tar -czf $OUTPUT_DIR.tar.gz $OUTPUT_DIR/
-        echo "✅ 打包完成: $OUTPUT_DIR.tar.gz"
-        ls -lh *.tar.gz
+        echo "✅ 打包完成: $OUTPUT_DIR.tar.gz ($(du -h $OUTPUT_DIR.tar.gz | cut -f1))"
 
     - name: 上传构建产物
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-build-${{ github.run_number }}
+        name: kernel-asm-${{ github.run_number }}
         path: |
-          ${{ github.workspace }}/kernel-*.tar.gz
+          ${{ github.workspace }}/*.tar.gz
           ${{ github.workspace }}/build.log
-          ${{ github.workspace }}/config.log
         retention-days: 30
 
-    - name: 上传编译日志（即使失败）
+    - name: 上传详细日志（失败时）
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: build-failure-logs
+        name: failure-details-${{ github.run_number }}
         path: |
-          ${{ github.workspace }}/build*.log
-          ${{ github.workspace }}/config*.log
+          ${{ github.workspace }}/build.log
+          ${{ github.workspace }}/.config
+          ${{ github.workspace }}/drivers/base/power/wakeup.c
         retention-days: 15

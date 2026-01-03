@@ -22,13 +22,8 @@ jobs:
               aosp-gcc: true
               aosp-clang: true
               android-version: 12
-              # 关键修正：添加 -Wno-error 来禁止警告转错误
-              # 同时尝试通过 KCFLAGS 定义缺失的变量为 0 (假)，以跳过代码逻辑
-              extra-make-args: |
-                LLVM=1 
-                LLVM_IAS=1 
-                KCFLAGS="-w -Dg_station_pm_suspend=0" 
-                KCPPFLAGS="-w"
+              # 关键修正：回到单行模式，并简化 KCFLAGS 定义
+              extra-make-args: "LLVM=1 LLVM_IAS=1 KCFLAGS='-w -Dg_station_pm_suspend=0' KCPPFLAGS=-w"
               disable-lto: true
               anykernel3: true
               release: true

@@ -15,15 +15,16 @@ jobs:
           - name: Build Kernel
             uses: dabao1955/kernel_build_action@main
             with:
-              kernel-url: https://github.com/Rocky7842/android_kernel_asus_sm8250
+              kernel-url: https://github.com/YiYumagiccloud/android_kernel_asus_sm8250
               kernel-branch: lineage-23.0
+              # 刚才合并好的配置文件
               config: vendor/kona-perf_defconfig
               arch: arm64
               aosp-gcc: true
               aosp-clang: true
               android-version: 12
-              # 关键修正：回到单行模式，并简化 KCFLAGS 定义
-              extra-make-args: "LLVM=1 LLVM_IAS=1 KCFLAGS='-w -Dg_station_pm_suspend=0' KCPPFLAGS=-w"
+              # 只保留最基础的参数，KCFLAGS 里的宏定义可以删掉了，因为代码已经修好了
+              extra-make-args: "LLVM=1 LLVM_IAS=1 KCFLAGS=-w KCPPFLAGS=-w"
               disable-lto: true
               anykernel3: true
               release: true

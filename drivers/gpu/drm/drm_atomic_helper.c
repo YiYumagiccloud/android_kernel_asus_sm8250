@@ -49,7 +49,7 @@ extern bool asus_display_in_aod(void);
 extern bool asus_display_in_normal_on(void);
 /* ASUS BSP Display --- */
 
-bool g_station_pm_suspend = false;
+extern bool g_station_pm_suspend;
 EXPORT_SYMBOL(asus_current_fps);
 #endif
 

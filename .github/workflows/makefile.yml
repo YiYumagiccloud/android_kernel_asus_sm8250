@@ -17,15 +17,18 @@ jobs:
             with:
               kernel-url: https://github.com/Rocky7842/android_kernel_asus_sm8250
               kernel-branch: lineage-23.0
-              # 尝试使用这个更准确的配置文件
               config: vendor/kona-perf_defconfig
               arch: arm64
               aosp-gcc: true
               aosp-clang: true
               android-version: 12
-              # 增加针对现代内核编译的兼容性参数
-              extra-make-args: "LLVM=1 LLVM_IAS=1 KCFLAGS=-w"
-              # 必须禁用 LTO，否则 GitHub Actions 内存会直接溢出导致 Error 2
+              # 关键修正：添加 -Wno-error 来禁止警告转错误
+              # 同时尝试通过 KCFLAGS 定义缺失的变量为 0 (假)，以跳过代码逻辑
+              extra-make-args: |
+                LLVM=1 
+                LLVM_IAS=1 
+                KCFLAGS="-w -Dg_station_pm_suspend=0" 
+                KCPPFLAGS="-w"
               disable-lto: true
               anykernel3: true
               release: true

@@ -123,7 +123,7 @@ EXPORT_SYMBOL(g_station_hbm_mode);
 extern int ec_i2c_set_hbm(char enable);
 // for station pm suspend/resume
 bool g_station_pm_suspend = false;
-EXPORT_SYMBOL(g_station_pm_suspend);
+
 /* ASUS BSP Display --- */
 
 static char *dp_display_state_name(enum dp_display_states state)

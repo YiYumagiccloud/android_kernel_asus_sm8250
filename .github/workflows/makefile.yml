@@ -1,30 +1,41 @@
-# A simple action usage
 name: Build Kernel
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   Build-Kernel:
     strategy:
       fail-fast: false
-    runs-on: ubuntu-latest
+    # 将运行环境锁定为 ubuntu-22.04
+    runs-on: ubuntu-22.04
     permissions:
-      contents: write # 必须赋予写权限，否则无法发布 Release
+      contents: write
 
     steps:
-          - name: Build Kernel
-            uses: dabao1955/kernel_build_action@main
-            with:
-              kernel-url: https://github.com/YiYumagiccloud/android_kernel_asus_sm8250
-              kernel-branch: lineage-23.0
-              # 刚才合并好的配置文件
-              config: vendor/kona-perf_defconfig
-              arch: arm64
-              aosp-gcc: true
-              aosp-clang: true
-              android-version: 12
-              # 只保留最基础的参数，KCFLAGS 里的宏定义可以删掉了，因为代码已经修好了
-              extra-make-args: "LLVM=1 LLVM_IAS=1 KCFLAGS=-w KCPPFLAGS=-w"
-              disable-lto: true
-              anykernel3: true
-              release: true
+      - name: Build Kernel
+        uses: dabao1955/kernel_build_action@main
+        with:
+          kernel-url: https://github.com/YiYumagiccloud/android_kernel_asus_sm8250
+          kernel-branch: lineage-23.0
+          config: vendor/kona-perf_defconfig
+          arch: arm64
+          
+          # 针对较新的内核建议开启
+          aosp-gcc: true
+          aosp-clang: true
+          
+          # 如果编译 LineageOS 23.0 (Android 15/16)，
+          # 建议尝试使用更现代的 Clang 版本以减少报错
+          # clang-version: r510161 
+          
+          android-version: 12
+          
+          # LLVM=1 是 SM8250 内核的标配
+          # 如果报错提示不支持 LLVM_IAS，可以尝试删掉 LLVM_IAS=1
+          extra-make-args: "LLVM=1 LLVM_IAS=1"
+          
+          # 必须禁用 LTO 否则 GitHub Actions 的 7GB 内存会直接爆掉 (OOM)
+          disable-lto: true
+          
+          anykernel3: true
+          release: true

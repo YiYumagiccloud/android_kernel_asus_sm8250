@@ -15,7 +15,7 @@ jobs:
       - name: Build Kernel
         uses: dabao1955/kernel_build_action@main
         with:
-          kernel-url: https://github.com/YiYumagiccloud/android_kernel_asus_sm8250
+          kernel-url: https://github.com/Rocky7842/android_kernel_asus_sm8250
           kernel-branch: lineage-23.0
           config: vendor/kona-perf_defconfig
           arch: arm64

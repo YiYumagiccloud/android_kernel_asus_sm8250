@@ -32,7 +32,7 @@ jobs:
           
           # LLVM=1 是 SM8250 内核的标配
           # 如果报错提示不支持 LLVM_IAS，可以尝试删掉 LLVM_IAS=1
-          extra-make-args: "LLVM=1 LLVM_IAS=1"
+          extra-make-args: "LLVM=1 LLVM_IAS=1 WERROR=0"
           
           # 必须禁用 LTO 否则 GitHub Actions 的 7GB 内存会直接爆掉 (OOM)
           disable-lto: true
